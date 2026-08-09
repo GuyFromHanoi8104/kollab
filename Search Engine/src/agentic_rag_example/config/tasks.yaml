@@ -1,0 +1,26 @@
+rag_task:
+  description: >
+    Generate a list of recommendations based on the users query: {query}. Only use the results found.
+    If you believe its appropriate, use the filter_by and filter_value to filter the results.
+    If you do not use the filter_by and filter_value, do not add filter_by and filter_value to the argument schema within the tool.
+    You can filter by the following properties: title, director, description, type, country, release_year, listed_in.
+  expected_output: >
+    A structured list of recommendations based on the users query: {query}. Only use the results found.
+  agent: rag_agent
+
+expand_details_task:
+  description: >
+      Review the context you got and expand each topic into a full section for a report.
+      Make sure the report is detailed and contains any and all relevant information.
+      Use the ExaSearch tool to search for relevant information, expanding more details on the recommendation.
+  expected_output: >
+    A detailed section of information for each recommendation.
+  agent: expand_details_agent
+
+report_task:
+  description: >
+    Combine the detailed sections of information into a full report.
+    Each section should have recommendation title, director, description, type, country, release_year, listed_in and the expanded details.
+  expected_output: >
+    The expected output is a structured list of recommendations, each with a detailed section of information.
+  agent: report_agent
