@@ -11,6 +11,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "starlette<0.38.0",
     "streamlit>=1.35.0",
+    "supabase>=2.0.0",
     "weaviate-client>=4.10.4",
 ]
 
