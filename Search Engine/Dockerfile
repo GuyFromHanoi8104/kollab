@@ -18,6 +18,14 @@ COPY src/ ./src/
 # than sitting in a pipe buffer.
 ENV PYTHONUNBUFFERED=1
 
+# Declarative only -- it does not change what uvicorn binds to. It exists so
+# Railway can infer the target port for a generated domain. Without it the
+# edge proxy guessed a different port than the app was listening on, which
+# surfaces as a 502 "Application failed to respond" even though the
+# container is healthy and passing its internal healthcheck. 8080 is the
+# value Railway injects as $PORT by default.
+EXPOSE 8080
+
 # Shell form, so ${PORT} (injected by Railway at runtime) actually expands.
 #
 # --workers 1 is deliberate and load-bearing: the rate limiter keeps its
