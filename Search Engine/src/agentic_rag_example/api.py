@@ -52,7 +52,37 @@ ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
-limiter = Limiter(key_func=get_remote_address, default_limits=[])
+# How many proxy hops sit in front of this app. Railway terminates TLS at its
+# edge and appends to X-Forwarded-For, so the real client is 1 from the right.
+TRUSTED_PROXY_HOPS = int(os.getenv("TRUSTED_PROXY_HOPS", "1"))
+
+
+def client_ip(request: Request) -> str:
+    """Rate-limit key that survives a reverse proxy.
+
+    Behind any managed host, request.client.host is the load balancer, so
+    every user in the world would share a single bucket and the limit would
+    be useless.
+
+    Reads X-Forwarded-For from the RIGHT, not the left. Anyone can send their
+    own X-Forwarded-For header; a proxy appends to it rather than replacing
+    it, so the leftmost entry is attacker-controlled -- rotating it would
+    bypass the limit completely, which is exactly the abuse this limit
+    exists to stop. The Nth-from-right entry is what the trusted proxy
+    actually observed.
+
+    Falls back to request.client.host when the header is absent (local runs).
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        hops = [part.strip() for part in forwarded.split(",") if part.strip()]
+        if hops:
+            index = min(TRUSTED_PROXY_HOPS, len(hops))
+            return hops[-index]
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=client_ip, default_limits=[])
 
 
 @asynccontextmanager
@@ -103,7 +133,16 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 @app.get("/health")
 def health(request: Request):
-    return {"status": "ok", "weaviate_ready": request.app.state.weaviate.is_ready()}
+    return {
+        "status": "ok",
+        "weaviate_ready": request.app.state.weaviate.is_ready(),
+        # Echoes back the key this caller is rate-limited under. Without it
+        # there is no way to tell from outside whether the proxy fix actually
+        # works in the hosted environment -- if this shows the load balancer
+        # instead of your own IP, every user is sharing one bucket. Only ever
+        # reveals the caller's own address to themselves.
+        "rate_limit_key": client_ip(request),
+    }
 
 
 @app.post("/search")

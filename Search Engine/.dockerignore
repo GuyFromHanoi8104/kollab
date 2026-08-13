@@ -1,0 +1,18 @@
+# Secrets must never reach the image. The Dockerfile only COPYs
+# requirements-api.txt and src/, so this is belt-and-braces -- but it stops a
+# later `COPY . .` from silently baking credentials into a layer, where they
+# survive even if a subsequent layer deletes the file.
+.env
+.env.*
+!.env.example
+
+# Local venv would otherwise be copied over the installed site-packages.
+.venv/
+__pycache__/
+*.py[cod]
+
+# Netflix demo data and the CrewAI lockfiles -- nothing the API reads.
+sources/
+uv.lock
+uv copy.lock
+pyproject.toml
