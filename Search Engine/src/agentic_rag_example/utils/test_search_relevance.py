@@ -1,9 +1,12 @@
 """Relevance test for search_profiles().
 
-The 7 real profiles all have empty bio/niche/location, so querying them can
-only ever prove "it ran" -- every distance comes back identical. To actually
-test ranking, this inserts temporary profiles that DO have text, asserts the
-right one ranks first for each query, then deletes them.
+Real profiles are filled in gradually, so relying on them alone makes this
+test's outcome depend on whoever last edited their bio. Instead it inserts
+fixtures with known text, asserts the right one ranks first for each query,
+and deletes them again -- deterministic regardless of live data.
+
+Fixture `niche` values are lists: profiles.niche is a text[] column, mapped
+to TEXT_ARRAY in Weaviate.
 
 Weaviate only. Supabase is never written to. Cleanup runs in a finally block.
 """
@@ -26,23 +29,23 @@ load_dotenv(UTILS.parents[2] / ".env")
 # crash is obvious in the console.
 FIXTURES = {
     "aaaaaaaa-0000-0000-0000-000000000001": {
-        "name": "TEMP-Beauty", "role": "creator", "niche": "Beauty", "location": "Hanoi",
+        "name": "TEMP-Beauty", "role": "creator", "niche": ["BEAUTY"], "location": "Hanoi",
         "bio": "I post skincare routines, product reviews and makeup tutorials for young women.",
     },
     "aaaaaaaa-0000-0000-0000-000000000002": {
-        "name": "TEMP-Fitness", "role": "creator", "niche": "Fitness", "location": "Da Nang",
+        "name": "TEMP-Fitness", "role": "creator", "niche": ["FITNESS"], "location": "Da Nang",
         "bio": "Strength coach filming gym workouts, lifting form breakdowns and protein recipes.",
     },
     "aaaaaaaa-0000-0000-0000-000000000003": {
-        "name": "TEMP-Tech", "role": "creator", "niche": "Tech", "location": "Ho Chi Minh City",
+        "name": "TEMP-Tech", "role": "creator", "niche": ["TECH"], "location": "Ho Chi Minh City",
         "bio": "I review laptops, mechanical keyboards and phone gadgets for students.",
     },
     "aaaaaaaa-0000-0000-0000-000000000004": {
-        "name": "TEMP-CosmeticsBrand", "role": "brand", "niche": "Beauty", "location": "Hanoi",
+        "name": "TEMP-CosmeticsBrand", "role": "brand", "niche": ["BEAUTY"], "location": "Hanoi",
         "bio": "Cosmetics company launching a new facial serum and moisturiser line.",
     },
     "aaaaaaaa-0000-0000-0000-000000000005": {
-        "name": "TEMP-SupplementBrand", "role": "brand", "niche": "Fitness", "location": "Hanoi",
+        "name": "TEMP-SupplementBrand", "role": "brand", "niche": ["FITNESS"], "location": "Hanoi",
         "bio": "Sports nutrition brand selling whey protein and pre-workout supplements.",
     },
 }

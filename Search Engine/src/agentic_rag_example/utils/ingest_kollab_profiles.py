@@ -68,15 +68,32 @@ def fetch_profiles(client):
         start += page_size
 
 
+def _text(value):
+    return (value or "").strip()
+
+
+def _text_list(value):
+    """`profiles.niche` is a text[] column, unlike `campaigns.niche` (text).
+
+    Tolerates a bare string as well, so a legacy or hand-edited row can't
+    crash the whole batch.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    return [str(v).strip() for v in value if str(v).strip()]
+
+
 def to_properties(row):
     return {
         "profile_id": str(row["id"]),
-        "name": (row.get("name") or "").strip(),
-        "role": (row.get("role") or "").strip(),
-        "bio": (row.get("bio") or "").strip(),
-        "niche": (row.get("niche") or "").strip(),
-        "location": (row.get("location") or "").strip(),
-        "handle": (row.get("handle") or "").strip(),
+        "name": _text(row.get("name")),
+        "role": _text(row.get("role")),
+        "bio": _text(row.get("bio")),
+        "niche": _text_list(row.get("niche")),
+        "location": _text(row.get("location")),
+        "handle": _text(row.get("handle")),
     }
 
 
@@ -88,8 +105,11 @@ def report_vector_coverage(profiles):
     represent, and semantic search can never rank it. That distinction is
     invisible from the object count alone, hence this explicit summary.
     """
+    # Goes through to_properties rather than reading the raw row, so this
+    # can't drift from what is actually sent (niche is a list, the rest text).
     embeddable = sum(
-        1 for row in profiles if any((row.get(f) or "").strip() for f in VECTORIZED_FIELDS)
+        1 for row in profiles
+        if any(to_properties(row)[field] for field in VECTORIZED_FIELDS)
     )
     print(f"\n{embeddable}/{len(profiles)} profile(s) have text in {list(VECTORIZED_FIELDS)}.")
     if embeddable < len(profiles):
@@ -117,7 +137,10 @@ def create_collection(client):
             # vectorize_property_name=False keeps the literal words "bio"/"niche"
             # out of the embedded text -- only the values themselves are embedded.
             Property(name="bio", data_type=DataType.TEXT, vectorize_property_name=False),
-            Property(name="niche", data_type=DataType.TEXT, vectorize_property_name=False),
+            # TEXT_ARRAY mirrors the source text[] column. Weaviate joins the
+            # elements for embedding, and it stays filterable with
+            # contains_any(), which a joined string would not be.
+            Property(name="niche", data_type=DataType.TEXT_ARRAY, vectorize_property_name=False),
             Property(name="location", data_type=DataType.TEXT, vectorize_property_name=False),
         ],
     )
