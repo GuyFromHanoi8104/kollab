@@ -1,0 +1,21 @@
+# Dependencies for the search API only (agentic_rag_example/api.py and the
+# utils it imports). Deliberately separate from pyproject.toml:
+#
+# pyproject pins starlette<0.38.0 for the CrewAI stack, while FastAPI needs
+# starlette>=0.40 -- the two cannot resolve in one environment. The API
+# imports nothing from CrewAI, so it gets its own manifest rather than
+# forcing a pin that would break the existing crew code.
+#
+# Also keeps the deployed image small: no crewai, docling or streamlit.
+#
+#   python -m venv .venv && .venv/Scripts/pip install -r requirements-api.txt
+#   uvicorn agentic_rag_example.api:app --app-dir src
+
+fastapi>=0.141.1
+uvicorn[standard]>=0.52.2
+slowapi>=0.1.10
+weaviate-client>=4.22.0
+python-dotenv>=1.2.2
+
+# Only needed by ingest_kollab_profiles.py, not by the API at request time.
+supabase>=2.31.0

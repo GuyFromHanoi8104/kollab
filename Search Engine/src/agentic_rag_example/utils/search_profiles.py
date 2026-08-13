@@ -33,27 +33,13 @@ VALID_ROLES = ("creator", "brand")
 RETURNED_FIELDS = ("profile_id", "name", "role", "handle", "bio", "niche", "location")
 
 
-def search_profiles(query: str, role: str | None = None, limit: int = 5) -> list[dict]:
-    """Return the profiles most semantically similar to `query`.
+def connect_client():
+    """Open a Weaviate Cloud connection, raising early on missing config.
 
-    Args:
-        query: Free-text description, e.g. "beauty creator who reviews skincare".
-        role:  Optional "creator" or "brand" to restrict results.
-        limit: Maximum number of profiles to return.
-
-    Returns:
-        A list of plain dicts ordered best-match first. Each carries the
-        profile fields plus `distance` (lower is closer; roughly 0-2 for
-        cosine). Empty list if nothing matches.
-
-    Raises:
-        ValueError: on a blank query, a bad role, or missing credentials.
+    Split out so a long-lived process (the FastAPI app) can open one
+    connection at startup and reuse it, rather than paying a TLS handshake
+    per request.
     """
-    if not query or not query.strip():
-        raise ValueError("query must be a non-empty string")
-    if role is not None and role not in VALID_ROLES:
-        raise ValueError(f"role must be one of {VALID_ROLES}, got {role!r}")
-
     wcd_url = os.getenv("WEAVIATE_URL")
     wcd_api_key = os.getenv("WEAVIATE_API_KEY")
     openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -69,13 +55,45 @@ def search_profiles(query: str, role: str | None = None, limit: int = 5) -> list
     if missing:
         raise ValueError("Missing required environment variables: " + ", ".join(missing))
 
-    client = weaviate.connect_to_weaviate_cloud(
+    return weaviate.connect_to_weaviate_cloud(
         cluster_url=wcd_url,
         auth_credentials=Auth.api_key(wcd_api_key),
         # The vectorizer embeds the *query* server-side at search time, so
         # this header is required for reads, not just for ingestion.
         headers={"X-OpenAI-Api-Key": openai_api_key},
     )
+
+
+def search_profiles(
+    query: str, role: str | None = None, limit: int = 5, client=None
+) -> list[dict]:
+    """Return the profiles most semantically similar to `query`.
+
+    Args:
+        query:  Free-text description, e.g. "beauty creator who reviews skincare".
+        role:   Optional "creator" or "brand" to restrict results.
+        limit:  Maximum number of profiles to return.
+        client: Optional existing Weaviate client to reuse. When given, the
+                caller owns its lifecycle and it is NOT closed here -- that's
+                what lets the API share one pooled connection. When omitted,
+                a connection is opened and closed around this single call.
+
+    Returns:
+        A list of plain dicts ordered best-match first. Each carries the
+        profile fields plus `distance` (lower is closer; roughly 0-2 for
+        cosine). Empty list if nothing matches.
+
+    Raises:
+        ValueError: on a blank query, a bad role, or missing credentials.
+    """
+    if not query or not query.strip():
+        raise ValueError("query must be a non-empty string")
+    if role is not None and role not in VALID_ROLES:
+        raise ValueError(f"role must be one of {VALID_ROLES}, got {role!r}")
+
+    owns_client = client is None
+    if owns_client:
+        client = connect_client()
     try:
         collection = client.collections.get(COLLECTION_NAME)
         response = collection.query.near_text(
@@ -94,7 +112,10 @@ def search_profiles(query: str, role: str | None = None, limit: int = 5) -> list
             for obj in response.objects
         ]
     finally:
-        client.close()
+        # Only close what this call opened -- closing an injected client
+        # would kill the pooled connection for every later request.
+        if owns_client:
+            client.close()
 
 
 if __name__ == "__main__":
