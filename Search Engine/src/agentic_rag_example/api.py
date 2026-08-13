@@ -87,15 +87,31 @@ limiter = Limiter(key_func=client_ip, default_limits=[])
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Open the shared Weaviate connection once, close it on shutdown."""
-    app.state.weaviate = connect_client()
-    if not app.state.weaviate.is_ready():
-        app.state.weaviate.close()
-        raise RuntimeError("Weaviate is not ready -- check WEAVIATE_URL / WEAVIATE_API_KEY")
+    """Open the shared Weaviate connection once, close it on shutdown.
+
+    A startup failure is recorded rather than raised. Raising here kills the
+    container, so the platform reports only "healthcheck failure" -- the app
+    is dead and cannot serve the one endpoint that would explain why. Staying
+    up and reporting "degraded" on /health turns a blind restart loop into a
+    readable error, whether the cause is a missing env var or Weaviate being
+    briefly unreachable.
+    """
+    app.state.weaviate = None
+    app.state.startup_error = None
+    try:
+        client = connect_client()
+        if not client.is_ready():
+            client.close()
+            raise RuntimeError("connected, but Weaviate reported not ready")
+        app.state.weaviate = client
+    except Exception as exc:  # noqa: BLE001 - must not take the process down
+        app.state.startup_error = f"{type(exc).__name__}: {exc}"
+        print(f"STARTUP ERROR: {app.state.startup_error}", flush=True)
     try:
         yield
     finally:
-        app.state.weaviate.close()
+        if app.state.weaviate is not None:
+            app.state.weaviate.close()
 
 
 app = FastAPI(title="Kollab Search API", version="1.0.0", lifespan=lifespan)
@@ -133,9 +149,20 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 @app.get("/health")
 def health(request: Request):
+    state = request.app.state
+    ready = False
+    if state.weaviate is not None:
+        try:
+            ready = state.weaviate.is_ready()
+        except Exception as exc:  # noqa: BLE001 - health must never 500
+            state.startup_error = f"{type(exc).__name__}: {exc}"
+
+    # Always 200 while the process is alive, so the platform healthcheck
+    # passes and this stays reachable to report what is actually wrong.
     return {
-        "status": "ok",
-        "weaviate_ready": request.app.state.weaviate.is_ready(),
+        "status": "ok" if ready else "degraded",
+        "weaviate_ready": ready,
+        "startup_error": state.startup_error,
         # Echoes back the key this caller is rate-limited under. Without it
         # there is no way to tell from outside whether the proxy fix actually
         # works in the hosted environment -- if this shows the load balancer
@@ -154,6 +181,15 @@ def search(request: Request, body: SearchRequest):
         raise HTTPException(
             status_code=400,
             detail=f"role must be one of {list(VALID_ROLES)}, got {body.role!r}",
+        )
+
+    if request.app.state.weaviate is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Search is unavailable: "
+                f"{request.app.state.startup_error or 'no Weaviate connection'}"
+            ),
         )
 
     try:
