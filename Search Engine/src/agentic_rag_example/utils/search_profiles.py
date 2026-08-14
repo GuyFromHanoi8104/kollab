@@ -30,6 +30,14 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 COLLECTION_NAME = "kollab_profiles"
 VALID_ROLES = ("creator", "brand")
+# 1.0 = pure vector, 0.0 = pure keyword. Chosen by measurement, not taste:
+# at 0.75 exact-name search failed 3 of 4 cases; at Weaviate's 0.5 default the
+# right name ranked first but tied the runner-up at 0.000 margin, i.e. correct
+# by luck. 0.4 separates names by ~0.2 while conceptual queries with no shared
+# vocabulary ("someone who films themselves lifting heavy weights") still
+# resolve correctly. Kept in an env var so it can be retuned once there are
+# enough real profiles for BM25 noise to matter.
+HYBRID_ALPHA = float(os.getenv("SEARCH_HYBRID_ALPHA", "0.4"))
 RETURNED_FIELDS = ("profile_id", "name", "role", "handle", "bio", "niche", "location")
 
 
@@ -96,18 +104,32 @@ def search_profiles(
         client = connect_client()
     try:
         collection = client.collections.get(COLLECTION_NAME)
-        response = collection.query.near_text(
+        # Hybrid, not pure near_text: `name` and `handle` are stored with
+        # skip_vectorization (a person's name adds noise to an embedding
+        # rather than meaning), so a vector-only search can never match
+        # someone by name -- searching "Warren" returned whoever happened to
+        # be semantically closest to the word. BM25 does match those fields,
+        # because skip_vectorization only excludes a property from the
+        # embedding, not from the inverted index.
+        #
+        # alpha blends the two: 1.0 is pure vector, 0.0 is pure keyword.
+        # Default 0.5 keeps conceptual queries ("fitness creator in Hanoi")
+        # working while exact names win on the keyword side.
+        response = collection.query.hybrid(
             query=query,
+            alpha=HYBRID_ALPHA,
             limit=limit,
-            # `role` is stored with skip_vectorization, so it contributes
-            # nothing to the embedding but is still exact-match filterable.
+            # `role` is skip_vectorization too, but still exact-match filterable.
             filters=Filter.by_property("role").equal(role) if role else None,
-            return_metadata=MetadataQuery(distance=True),
+            return_metadata=MetadataQuery(score=True),
         )
         return [
             {
                 **{field: obj.properties.get(field) for field in RETURNED_FIELDS},
-                "distance": obj.metadata.distance,
+                # Hybrid returns a fused relevance score (higher is better),
+                # not a vector distance (lower is better). Different scale and
+                # direction, so the key name changes with it.
+                "score": obj.metadata.score,
             }
             for obj in response.objects
         ]
@@ -130,6 +152,6 @@ if __name__ == "__main__":
         print(f'\n"{demo_query}"{label} -> {len(results)} result(s)')
         for r in results:
             print(
-                f"   dist={r['distance']:.4f}  {str(r['name'])[:20]:22}"
+                f"   score={r['score']:.4f}  {str(r['name'])[:20]:22}"
                 f"  role={r['role']:8} niche={r['niche'] or '-'}"
             )
