@@ -2,8 +2,14 @@
 
     uvicorn agentic_rag_example.api:app --app-dir "src" --reload
 
-One endpoint: POST /search. No auth -- guest search is intentional, matching
-how Discover Creators already works for logged-out visitors.
+Two endpoints:
+
+  * POST /search -- public, unauthenticated. Guest search is intentional,
+    matching how Discover Creators already works for logged-out visitors.
+  * POST /webhooks/profiles -- private, shared-secret authenticated. Called
+    by a Supabase Database Webhook on every INSERT/UPDATE/DELETE to
+    `profiles`, so a signup is searchable within seconds instead of waiting
+    on someone to rerun ingest_kollab_profiles.py by hand.
 
 Deliberate choices worth knowing:
 
@@ -12,17 +18,21 @@ Deliberate choices worth knowing:
     search and, under load, exhaust sockets.
   * Every search costs money: the text2vec_openai vectorizer embeds the
     query server-side on each call. That is why there is a per-IP rate
-    limit even though the endpoint is public and unauthenticated.
+    limit even though the endpoint is public and unauthenticated. The
+    webhook endpoint doesn't need the same limit -- it isn't public, the
+    shared secret is the defense, and Supabase (not a search bar) controls
+    how often it fires.
   * Validation errors return 400, not FastAPI's default 422, so a missing
     or blank query reads the same as any other bad request.
 """
 
 import os
+import secrets
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -35,9 +45,18 @@ from slowapi.util import get_remote_address
 # sys.path approach test_search_relevance.py already uses.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "utils"))
 from search_profiles import VALID_ROLES, connect_client, search_profiles  # noqa: E402
+from profile_webhook import handle_profile_change  # noqa: E402
 
 MAX_LIMIT = 25
 DEFAULT_RATE_LIMIT = "20/minute"
+
+# Shared secret Supabase sends back as a custom HTTP header on every Database
+# Webhook delivery (Dashboard -> Database -> Webhooks -> HTTP Headers), not a
+# per-request Authorization scheme -- Supabase's webhook config only supports
+# static headers. Unset means the endpoint is disabled outright (fails
+# closed): a webhook that silently accepted unauthenticated calls would let
+# anyone rewrite arbitrary objects in the search index.
+PROFILE_WEBHOOK_SECRET = os.getenv("PROFILE_WEBHOOK_SECRET")
 
 # Both resolve to the Vercel deployment. Overridable so Task 4 can add a
 # staging origin without a code change. Note "*" is deliberately NOT used:
@@ -131,6 +150,17 @@ class SearchRequest(BaseModel):
     limit: int = Field(5, ge=1, le=MAX_LIMIT)
 
 
+class ProfileWebhookPayload(BaseModel):
+    """Supabase's Database Webhook body. Extra keys (schema, old_table, ...)
+    are ignored rather than rejected -- this only reads what it needs, so an
+    unrelated field Supabase adds later can't turn into a 400 here."""
+
+    type: str
+    table: str
+    record: dict | None = None
+    old_record: dict | None = None
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError):
     """Return 400 for malformed bodies instead of FastAPI's default 422."""
@@ -209,3 +239,30 @@ def search(request: Request, body: SearchRequest):
         "count": len(results),
         "results": results,
     }
+
+
+@app.post("/webhooks/profiles")
+def webhook_profiles(
+    request: Request,
+    body: ProfileWebhookPayload,
+    x_webhook_secret: str = Header(default=""),
+):
+    if not PROFILE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Webhook endpoint is not configured")
+    # compare_digest over the raw header, not an `==`, so response timing
+    # can't be used to guess the secret one byte at a time.
+    if not secrets.compare_digest(x_webhook_secret, PROFILE_WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+    if request.app.state.weaviate is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Search is unavailable: "
+                f"{request.app.state.startup_error or 'no Weaviate connection'}"
+            ),
+        )
+
+    result = handle_profile_change(body.model_dump(), request.app.state.weaviate)
+    print(f"webhook: {result}", flush=True)
+    return result

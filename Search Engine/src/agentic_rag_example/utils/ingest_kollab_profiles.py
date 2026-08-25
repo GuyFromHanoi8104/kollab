@@ -1,8 +1,11 @@
 """Load real Kollab profiles from Supabase into a Weaviate collection.
 
-One-time / manually-rerun ingestion (v1 scope -- no real-time sync). Follows
-the same Weaviate Cloud + text-embedding-3-small pattern already proven in
-pre-process-docs.py.
+Bulk / catch-up ingestion. Live sync for one profile at a time lives in
+profile_webhook.py instead, wired to a Supabase Database Webhook -- this
+script is what you rerun by hand to backfill everything at once (first setup,
+after a schema change, or to recover a Weaviate sandbox that expired and took
+the index with it). Follows the same Weaviate Cloud + text-embedding-3-small
+pattern already proven in pre-process-docs.py.
 
 Reruns are safe: each object is keyed by the profile's Supabase UUID, so a
 second run overwrites rather than duplicating. Pass --recreate to drop and
@@ -24,6 +27,13 @@ from supabase import create_client
 from weaviate.classes.config import Configure, DataType, Property
 from weaviate.classes.init import Auth
 
+from profile_transform import (
+    COLLECTION_NAME,
+    SOURCE_COLUMNS,
+    VECTORIZED_FIELDS,
+    to_properties,
+)
+
 # Resolved relative to this file rather than the cwd -- bare load_dotenv()
 # walks up from the *caller's* directory, so running this from anywhere
 # other than the project tree silently loads nothing and every key reads
@@ -36,18 +46,6 @@ wcd_api_key = os.getenv("WEAVIATE_API_KEY")
 openai_api_key = os.getenv("OPENAI_API_KEY")
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-
-COLLECTION_NAME = "kollab_profiles"
-
-# Weaviate reserves `id` for the object UUID, so the Supabase id is stored as
-# `profile_id` (and reused as the object UUID to make reruns idempotent).
-#
-# Only bio/niche/location carry real semantic meaning, so those are what the
-# vectorizer embeds. Names, handles and UUIDs would just add noise to the
-# vector -- they stay as retrievable/filterable properties instead, which is
-# what BM25 and `Filter.by_property` are for on the query side.
-SOURCE_COLUMNS = "id, name, role, bio, niche, location, handle"
-VECTORIZED_FIELDS = ("bio", "niche", "location")
 
 
 def fetch_profiles(client):
@@ -66,35 +64,6 @@ def fetch_profiles(client):
         if len(batch) < page_size:
             return rows
         start += page_size
-
-
-def _text(value):
-    return (value or "").strip()
-
-
-def _text_list(value):
-    """`profiles.niche` is a text[] column, unlike `campaigns.niche` (text).
-
-    Tolerates a bare string as well, so a legacy or hand-edited row can't
-    crash the whole batch.
-    """
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value.strip()] if value.strip() else []
-    return [str(v).strip() for v in value if str(v).strip()]
-
-
-def to_properties(row):
-    return {
-        "profile_id": str(row["id"]),
-        "name": _text(row.get("name")),
-        "role": _text(row.get("role")),
-        "bio": _text(row.get("bio")),
-        "niche": _text_list(row.get("niche")),
-        "location": _text(row.get("location")),
-        "handle": _text(row.get("handle")),
-    }
 
 
 def report_vector_coverage(profiles):
