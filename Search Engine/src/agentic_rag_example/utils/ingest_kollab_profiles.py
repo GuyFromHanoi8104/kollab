@@ -103,6 +103,10 @@ def create_collection(client):
             Property(name="name", data_type=DataType.TEXT, skip_vectorization=True),
             Property(name="role", data_type=DataType.TEXT, skip_vectorization=True),
             Property(name="handle", data_type=DataType.TEXT, skip_vectorization=True),
+            # Keyword-searchable like name/handle, not embedded -- a company
+            # name isn't semantic content, it's an identifier someone types
+            # expecting an exact-ish match, same as searching a person by name.
+            Property(name="company_name", data_type=DataType.TEXT, skip_vectorization=True),
             # vectorize_property_name=False keeps the literal words "bio"/"niche"
             # out of the embedded text -- only the values themselves are embedded.
             Property(name="bio", data_type=DataType.TEXT, vectorize_property_name=False),

@@ -15,13 +15,20 @@ COLLECTION_NAME = "kollab_profiles"
 # vectorizer embeds. Names, handles and UUIDs would just add noise to the
 # vector -- they stay as retrievable/filterable properties instead, which is
 # what BM25 and `Filter.by_property` are for on the query side.
-SOURCE_COLUMNS = "id, name, role, bio, niche, location, handle"
+#
+# company_name matters specifically for brands: "name" is the account
+# holder's own name (whoever signed up), not the business -- searching a
+# brand by its actual company name had nothing to match against at all
+# before this, only bio text a keyword search could get lucky on. Every
+# creator row simply has this column null, so _text() below turns it into
+# "" for them same as any other blank field.
+SOURCE_COLUMNS = "id, name, role, bio, niche, location, handle, company_name"
 VECTORIZED_FIELDS = ("bio", "niche", "location")
 
 # The full set of columns a row needs unchanged in, for the webhook handler to
 # skip re-embedding an UPDATE that only touched an unrelated column (avatar,
 # follower counts, timestamps, ...).
-INDEXED_FIELDS = ("name", "role", "bio", "niche", "location", "handle")
+INDEXED_FIELDS = ("name", "role", "bio", "niche", "location", "handle", "company_name")
 
 
 def _text(value):
@@ -50,4 +57,5 @@ def to_properties(row):
         "niche": _text_list(row.get("niche")),
         "location": _text(row.get("location")),
         "handle": _text(row.get("handle")),
+        "company_name": _text(row.get("company_name")),
     }

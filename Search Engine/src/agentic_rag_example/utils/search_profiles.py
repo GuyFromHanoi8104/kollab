@@ -38,7 +38,7 @@ VALID_ROLES = ("creator", "brand")
 # resolve correctly. Kept in an env var so it can be retuned once there are
 # enough real profiles for BM25 noise to matter.
 HYBRID_ALPHA = float(os.getenv("SEARCH_HYBRID_ALPHA", "0.4"))
-RETURNED_FIELDS = ("profile_id", "name", "role", "handle", "bio", "niche", "location")
+RETURNED_FIELDS = ("profile_id", "name", "role", "handle", "bio", "niche", "location", "company_name")
 
 
 def connect_client():
